@@ -955,7 +955,9 @@ version = "0.1.0"
 name = "lsendd"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "localsend",
+ "tokio",
 ]
 
 [[package]]
