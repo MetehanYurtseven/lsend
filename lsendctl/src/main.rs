@@ -34,18 +34,21 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
-    /// List incoming requests waiting for a decision, one per line: id,
-    /// alias, address, content (tab-separated).
+    /// Show the incoming request waiting for a decision: alias, address,
+    /// fingerprint, content (tab-separated). Prints nothing when there is
+    /// none.
     Pending,
-    /// Accept a pending request. A text message is printed to stdout.
+    /// Accept the pending request. A text message is printed to stdout.
     Accept {
-        /// ID shown by `pending`.
-        id: u64,
+        /// Only accept if the request comes from this fingerprint.
+        #[arg(long)]
+        from: Option<String>,
     },
-    /// Decline a pending request.
+    /// Decline the pending request.
     Decline {
-        /// ID shown by `pending`.
-        id: u64,
+        /// Only decline if the request comes from this fingerprint.
+        #[arg(long)]
+        from: Option<String>,
     },
 }
 
@@ -58,8 +61,8 @@ async fn main() -> anyhow::Result<()> {
         Command::List { fingerprint } => (Request::List, fingerprint),
         Command::Send { to, paths } => (Request::Send { target: to, paths }, false),
         Command::Pending => (Request::Pending, false),
-        Command::Accept { id } => (Request::Accept { id }, false),
-        Command::Decline { id } => (Request::Decline { id }, false),
+        Command::Accept { from } => (Request::Accept { from }, false),
+        Command::Decline { from } => (Request::Decline { from }, false),
     };
 
     let path = socket_path()?;
@@ -84,8 +87,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Response::List { devices } => print_devices(&devices, show_fingerprint),
         Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
-        Response::Pending { requests } => print_pending(&requests),
-        // Unchanged, so `accept <id> | wl-copy` copies exactly the text.
+        Response::Pending { request } => {
+            if let Some(request) = request {
+                print_pending(&request);
+            }
+        }
+        // Unchanged, so `accept | wl-copy` copies exactly the text.
         Response::Accept { text } => print!("{}", text.unwrap_or_default()),
         Response::Decline => {}
     }
@@ -93,13 +100,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_pending(requests: &[PendingEntry]) {
-    for request in requests {
-        println!(
-            "{}\t{}\t{}\t{}",
-            request.id, request.alias, request.address, request.content
-        );
-    }
+fn print_pending(request: &PendingEntry) {
+    println!(
+        "{}\t{}\t{}\t{}",
+        request.alias, request.address, request.fingerprint, request.content
+    );
 }
 
 fn print_devices(devices: &[DeviceEntry], show_fingerprint: bool) {

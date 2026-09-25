@@ -134,7 +134,7 @@ impl Receiver {
                 println!("SessionEnd {alias} ({session_id}): {reason:?}");
             }
             ServerEventV2::PrepareUploadAborted { session_id } => {
-                self.pending.lock().unwrap().remove_session(&session_id);
+                self.pending.lock().unwrap().take_session(&session_id);
                 println!("PrepareUploadAborted {session_id}");
             }
             ServerEventV2::CancelReceived { ip, session_id } => {
@@ -156,16 +156,17 @@ impl Receiver {
             request.alias,
             request.content.summary()
         );
-        let id = self.pending.lock().unwrap().add(request);
-        println!("Pending request {id} from {summary}");
+        let session_id = request.session_id.clone();
+        self.pending.lock().unwrap().set(request);
+        println!("Pending request from {summary}");
 
         let pending = self.pending.clone();
         tokio::spawn(async move {
             tokio::time::sleep(PENDING_TIMEOUT).await;
-            let request = pending.lock().unwrap().take(id);
+            let request = pending.lock().unwrap().take_session(&session_id);
             if let Some(request) = request {
                 let _ = request.decline();
-                println!("Pending request {id} timed out, declined");
+                println!("Pending request from {summary} timed out, declined");
             }
         });
     }

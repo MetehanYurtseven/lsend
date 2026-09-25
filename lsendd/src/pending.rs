@@ -1,11 +1,11 @@
 use ipc::{PendingContent, PendingEntry};
 use localsend::http::server::v2::PrepareUploadDecisionV2;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-/// Upload requests waiting for `lsendctl accept` or `decline`, shared between
-/// the receiver (which adds them) and the IPC server (which decides them).
+/// The upload request waiting for `lsendctl accept` or `decline`, shared
+/// between the receiver (which sets it) and the IPC server (which decides it).
 pub type SharedPending = Arc<Mutex<Pending>>;
 
 /// What a request offers.
@@ -59,25 +59,35 @@ impl PendingRequest {
     }
 }
 
+/// At most one request waits at a time: it holds the server's only session
+/// slot, so further senders get 409 until it is decided.
 #[derive(Default)]
 pub struct Pending {
-    last_id: u64,
-    requests: BTreeMap<u64, PendingRequest>,
+    request: Option<PendingRequest>,
     /// Alias of the sender for each accepted file session, for logging.
     /// Only accepted requests become sessions and end with `SessionEnd`.
     sessions: HashMap<String, String>,
 }
 
 impl Pending {
-    /// Adds `request` under a fresh, short ID for `lsendctl`.
-    pub fn add(&mut self, request: PendingRequest) -> u64 {
-        self.last_id += 1;
-        self.requests.insert(self.last_id, request);
-        self.last_id
+    pub fn set(&mut self, request: PendingRequest) {
+        self.request = Some(request);
     }
 
-    pub fn take(&mut self, id: u64) -> Option<PendingRequest> {
-        self.requests.remove(&id)
+    /// Takes the waiting request. With `from`, only if its sender has that
+    /// fingerprint, so a request that replaced the one the user looked at is
+    /// not decided by mistake.
+    pub fn take(&mut self, from: Option<&str>) -> Result<PendingRequest, String> {
+        let request = self.request.as_ref().ok_or("No pending request")?;
+        if let Some(from) = from
+            && !request.fingerprint.eq_ignore_ascii_case(from)
+        {
+            return Err(format!(
+                "The pending request is from {} ({}), not {from}",
+                request.alias, request.fingerprint
+            ));
+        }
+        Ok(self.request.take().unwrap())
     }
 
     /// Accepts `request`, remembering the sender of a file session until it
@@ -96,23 +106,19 @@ impl Pending {
         self.sessions.remove(session_id)
     }
 
-    /// Forgets the request of an aborted session.
-    pub fn remove_session(&mut self, session_id: &str) {
-        self.requests
-            .retain(|_, request| request.session_id != session_id);
+    /// Takes the waiting request if it belongs to `session_id`, e.g. when
+    /// that session was aborted or timed out.
+    pub fn take_session(&mut self, session_id: &str) -> Option<PendingRequest> {
+        self.request
+            .take_if(|request| request.session_id == session_id)
     }
 
-    /// The waiting requests, ordered by ID.
-    pub fn entries(&self) -> Vec<PendingEntry> {
-        self.requests
-            .iter()
-            .map(|(id, request)| PendingEntry {
-                id: *id,
-                alias: request.alias.clone(),
-                fingerprint: request.fingerprint.clone(),
-                address: request.address.clone(),
-                content: request.content.summary(),
-            })
-            .collect()
+    pub fn entry(&self) -> Option<PendingEntry> {
+        self.request.as_ref().map(|request| PendingEntry {
+            alias: request.alias.clone(),
+            fingerprint: request.fingerprint.clone(),
+            address: request.address.clone(),
+            content: request.content.summary(),
+        })
     }
 }

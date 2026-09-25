@@ -67,25 +67,38 @@ pub async fn handle_connection(
             }
         }
         Some(Request::Pending) => Response::Pending {
-            requests: pending.lock().unwrap().entries(),
+            request: pending.lock().unwrap().entry(),
         },
-        Some(Request::Accept { id }) => {
+        Some(Request::Accept { from }) => {
             let mut pending = pending.lock().unwrap();
-            match pending.take(id).map(|request| pending.accept(request)) {
-                Some(Ok(text)) => {
-                    println!("Accepted request {id}");
-                    Response::Accept { text }
+            match pending.take(from.as_deref()) {
+                Ok(request) => {
+                    let alias = request.alias.clone();
+                    match pending.accept(request) {
+                        Ok(text) => {
+                            println!("Accepted request from {alias}");
+                            Response::Accept { text }
+                        }
+                        Err(_) => withdrawn(),
+                    }
                 }
-                Some(Err(_)) => withdrawn(id),
-                None => not_pending(id),
+                Err(message) => Response::Error { message },
             }
         }
-        Some(Request::Decline { id }) => {
-            let request = pending.lock().unwrap().take(id);
-            match request.map(|request| request.decline()) {
-                Some(Ok(())) => Response::Decline,
-                Some(Err(_)) => withdrawn(id),
-                None => not_pending(id),
+        Some(Request::Decline { from }) => {
+            let request = pending.lock().unwrap().take(from.as_deref());
+            match request {
+                Ok(request) => {
+                    let alias = request.alias.clone();
+                    match request.decline() {
+                        Ok(()) => {
+                            println!("Declined request from {alias}");
+                            Response::Decline
+                        }
+                        Err(_) => withdrawn(),
+                    }
+                }
+                Err(message) => Response::Error { message },
             }
         }
         None => return Ok(()),
@@ -93,15 +106,9 @@ pub async fn handle_connection(
     write_message(&mut write_half, &response).await
 }
 
-fn not_pending(id: u64) -> Response {
+fn withdrawn() -> Response {
     Response::Error {
-        message: format!("No pending request {id}"),
-    }
-}
-
-fn withdrawn(id: u64) -> Response {
-    Response::Error {
-        message: format!("Request {id} was withdrawn by the sender"),
+        message: "The request was withdrawn by the sender".to_string(),
     }
 }
 

@@ -8,10 +8,19 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub enum Request {
     Status,
     List,
-    Send { target: String, paths: Vec<PathBuf> },
+    Send {
+        target: String,
+        paths: Vec<PathBuf>,
+    },
     Pending,
-    Accept { id: u64 },
-    Decline { id: u64 },
+    /// `from` only decides the pending request if its sender has that
+    /// fingerprint.
+    Accept {
+        from: Option<String>,
+    },
+    Decline {
+        from: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,7 +34,7 @@ pub enum Response {
         sent_files: usize,
     },
     Pending {
-        requests: Vec<PendingEntry>,
+        request: Option<PendingEntry>,
     },
     /// `text` is set when the accepted request was a text message.
     Accept {
@@ -52,10 +61,9 @@ pub struct DeviceEntry {
     pub device_type: Option<DeviceType>,
 }
 
-/// An incoming request waiting for `accept` or `decline`.
+/// The incoming request waiting for `accept` or `decline`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingEntry {
-    pub id: u64,
     pub alias: String,
     /// Verified by the TLS handshake, the value to put into the `known` file.
     pub fingerprint: String,
