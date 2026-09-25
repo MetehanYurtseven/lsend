@@ -7,6 +7,9 @@ use tokio::net::UnixStream;
 #[derive(Parser)]
 #[command(name = "lsendctl")]
 struct Cli {
+    /// Print the daemon's response as a single line of JSON.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -36,6 +39,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let json = cli.json;
     let show_fingerprint = matches!(cli.command, Command::List { fingerprint: true });
     let request = match cli.command {
         Command::Status => Request::Status,
@@ -56,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("lsendd closed the connection without responding"))?;
 
     match response {
+        Response::Error { message } => anyhow::bail!("lsendd error: {message}"),
+        response if json => println!("{}", serde_json::to_string(&response)?),
         Response::Status(status) => {
             println!("alias: {}", status.alias);
             println!("fingerprint: {}", status.fingerprint);
@@ -63,7 +69,6 @@ async fn main() -> anyhow::Result<()> {
         }
         Response::List { devices } => print_devices(&devices, show_fingerprint),
         Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
-        Response::Error { message } => anyhow::bail!("lsendd error: {message}"),
     }
 
     Ok(())
