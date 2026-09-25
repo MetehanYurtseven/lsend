@@ -1,6 +1,8 @@
 use crate::identity::Identity;
 use crate::pending::SharedPending;
+use crate::policy;
 use crate::send;
+use crate::target::TargetSelector;
 use ipc::{DeviceEntry, DeviceType, Request, Response, read_message, socket_path, write_message};
 use localsend::discovery::{DiscoveryHandle, HttpChannel, StatefulDevice};
 use std::path::{Path, PathBuf};
@@ -101,9 +103,30 @@ pub async fn handle_connection(
                 Err(message) => Response::Error { message },
             }
         }
+        Some(Request::Trust { target }) => trust(&discovery, &target)
+            .await
+            .unwrap_or_else(|message| Response::Error { message }),
         None => return Ok(()),
     };
     write_message(&mut write_half, &response).await
+}
+
+/// A fingerprint is taken as-is, an alias or IP address is resolved like
+/// `send --to`.
+async fn trust(discovery: &DiscoveryHandle, target: &str) -> Result<Response, String> {
+    let target = target.trim();
+    let (alias, fingerprint) = match policy::is_fingerprint(target) {
+        true => (None, target.to_ascii_uppercase()),
+        false => {
+            let device = TargetSelector::parse(target)?
+                .resolve(discovery)
+                .await?
+                .device;
+            (Some(device.alias), device.fingerprint)
+        }
+    };
+    policy::trust(&fingerprint).map_err(|err| format!("Could not update the known file: {err}"))?;
+    Ok(Response::Trust { alias, fingerprint })
 }
 
 fn withdrawn() -> Response {

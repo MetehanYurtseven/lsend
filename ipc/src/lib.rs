@@ -21,6 +21,10 @@ pub enum Request {
     Decline {
         from: Option<String>,
     },
+    /// `target` is an alias, an IP address, or a fingerprint.
+    Trust {
+        target: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,6 +45,11 @@ pub enum Response {
         text: Option<String>,
     },
     Decline,
+    /// `alias` is unset when `trust` was given a fingerprint.
+    Trust {
+        alias: Option<String>,
+        fingerprint: String,
+    },
     Error {
         message: String,
     },

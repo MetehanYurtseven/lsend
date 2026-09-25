@@ -59,6 +59,12 @@ enum Command {
         #[arg(long)]
         from: Option<String>,
     },
+    /// Add a device to the known senders, whose requests `--accept known`
+    /// accepts without asking.
+    Trust {
+        /// Alias, IP address, or fingerprint of the device.
+        target: String,
+    },
 }
 
 #[tokio::main]
@@ -86,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Pending => (Request::Pending, false),
         Command::Accept { from } => (Request::Accept { from }, false),
         Command::Decline { from } => (Request::Decline { from }, false),
+        Command::Trust { target } => (Request::Trust { target }, false),
     };
 
     let path = socket_path()?;
@@ -127,6 +134,10 @@ async fn main() -> anyhow::Result<()> {
         // Unchanged, so `accept | wl-copy` copies exactly the text.
         Response::Accept { text } => print!("{}", text.unwrap_or_default()),
         Response::Decline => {}
+        Response::Trust { alias, fingerprint } => match alias {
+            Some(alias) => println!("Trusted {alias} ({fingerprint})"),
+            None => println!("Trusted {fingerprint}"),
+        },
     }
 
     Ok(())
