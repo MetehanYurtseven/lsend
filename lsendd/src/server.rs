@@ -1,9 +1,7 @@
-use localsend::crypto::cert::SelfSignedCert;
+use crate::identity::Identity;
 use localsend::http::server::v2::ServerEventV2;
 use localsend::http::server::web::WebConfig;
 use localsend::http::server::{ServerConfigV2, ServerHandle, TlsConfig, start_with_port};
-use localsend::http::state::ClientInfo;
-use localsend::model::discovery::{DeviceType, PROTOCOL_VERSION_V2};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -17,22 +15,16 @@ pub struct Server {
 }
 
 impl Server {
-    pub async fn start(cert: &SelfSignedCert, alias: &str, port: u16) -> anyhow::Result<Self> {
+    pub async fn start(identity: &Identity) -> anyhow::Result<Self> {
         let (event_tx, events) = mpsc::channel::<ServerEventV2>(16);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let handle = start_with_port(
-            port,
+            identity.port,
             Some(TlsConfig {
-                cert: cert.certificate_pem.clone(),
-                private_key: cert.private_key_pem.clone(),
+                cert: identity.cert.certificate_pem.clone(),
+                private_key: identity.cert.private_key_pem.clone(),
             }),
-            ClientInfo {
-                alias: alias.to_string(),
-                version: PROTOCOL_VERSION_V2.to_string(),
-                device_model: Some("lsendd".to_string()),
-                device_type: Some(DeviceType::Headless),
-                token: cert.fingerprint.clone(),
-            },
+            identity.client_info(),
             None,
             Some(ServerConfigV2 {
                 pin: None,

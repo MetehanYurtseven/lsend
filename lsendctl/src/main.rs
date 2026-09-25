@@ -15,9 +15,10 @@ struct Cli {
 enum Command {
     /// Show the daemon's identity and status.
     Status,
-    /// List devices discovered so far.
+    /// List reachable devices, one per line: alias, address, type
+    /// (tab-separated). Prints nothing when there are none.
     List {
-        /// Show each device's fingerprint.
+        /// Append each device's fingerprint as a last column.
         #[arg(long)]
         fingerprint: bool,
     },
@@ -69,20 +70,16 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn print_devices(devices: &[DeviceEntry], show_fingerprint: bool) {
-    if devices.is_empty() {
-        println!("No devices discovered yet.");
-        return;
-    }
     for device in devices {
         let device_type = device
             .device_type
             .as_ref()
-            .map(|t| format!("{t:?}"))
+            .map(|t| t.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         if show_fingerprint {
             println!(
                 "{}\t{}\t{}\t{}",
-                device.alias, device.fingerprint, device.address, device_type
+                device.alias, device.address, device_type, device.fingerprint
             );
         } else {
             println!("{}\t{}\t{}", device.alias, device.address, device_type);

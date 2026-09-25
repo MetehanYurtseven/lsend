@@ -47,6 +47,18 @@ pub enum DeviceType {
     Server,
 }
 
+impl std::fmt::Display for DeviceType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Mobile => "mobile",
+            Self::Desktop => "desktop",
+            Self::Web => "web",
+            Self::Headless => "headless",
+            Self::Server => "server",
+        })
+    }
+}
+
 /// The Unix domain socket lsendd listens on and lsendctl connects to.
 pub fn socket_path() -> anyhow::Result<PathBuf> {
     let runtime_dir =

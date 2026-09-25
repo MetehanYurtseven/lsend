@@ -1,10 +1,7 @@
 use crate::identity::Identity;
 use crate::send;
-use ipc::{
-    DeviceEntry, DeviceType, Request, Response, StatusResponse, read_message, socket_path,
-    write_message,
-};
-use localsend::discovery::{DiscoveryHandle, StatefulDevice};
+use ipc::{DeviceEntry, DeviceType, Request, Response, read_message, socket_path, write_message};
+use localsend::discovery::{DiscoveryHandle, HttpChannel, StatefulDevice};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,14 +48,13 @@ impl Drop for IpcServer {
 /// Handles a single IPC connection: reads one request, writes one response.
 pub async fn handle_connection(
     stream: UnixStream,
-    status: StatusResponse,
     identity: Arc<Identity>,
     discovery: Arc<DiscoveryHandle>,
 ) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let response = match read_message::<_, Request>(&mut reader).await? {
-        Some(Request::Status) => Response::Status(status),
+        Some(Request::Status) => Response::Status(identity.status()),
         Some(Request::List) => Response::List {
             devices: list_devices(&discovery).await,
         },
@@ -73,14 +69,17 @@ pub async fn handle_connection(
     write_message(&mut write_half, &response).await
 }
 
-/// Returns the known devices that are currently reachable: a plain TCP
-/// connect to each device's best channel, in parallel, no LocalSend protocol
-/// involved. Devices that no longer answer are left out, without touching
-/// the underlying discovery store.
+/// Returns the known devices that are currently reachable, sorted by alias:
+/// a plain TCP connect to each device's best channel, in parallel, no
+/// LocalSend protocol involved. Devices that no longer answer are left out,
+/// without touching the underlying discovery store.
 async fn list_devices(discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
     let mut checks = tokio::task::JoinSet::new();
     for known in discovery.devices() {
-        checks.spawn(async move { is_reachable(&known).await.then(|| to_entry(known)) });
+        let Some(http) = known.get_best_channel().and_then(|c| c.http()).cloned() else {
+            continue;
+        };
+        checks.spawn(async move { is_reachable(&http).await.then(|| to_entry(known, &http)) });
     }
 
     let mut devices = Vec::new();
@@ -89,13 +88,11 @@ async fn list_devices(discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
             devices.push(entry);
         }
     }
+    devices.sort_by(|a, b| a.alias.cmp(&b.alias));
     devices
 }
 
-async fn is_reachable(known: &StatefulDevice) -> bool {
-    let Some(http) = known.get_best_channel().and_then(|channel| channel.http()) else {
-        return false;
-    };
+async fn is_reachable(http: &HttpChannel) -> bool {
     tokio::time::timeout(
         LIST_PROBE_TIMEOUT,
         TcpStream::connect((http.host.as_str(), http.port)),
@@ -104,12 +101,12 @@ async fn is_reachable(known: &StatefulDevice) -> bool {
     .is_ok_and(|result| result.is_ok())
 }
 
-fn to_entry(known: StatefulDevice) -> DeviceEntry {
-    let address = known
-        .get_best_channel()
-        .and_then(|channel| channel.http())
-        .map(|http| format!("{}:{}", http.host, http.port))
-        .unwrap_or_default();
+fn to_entry(known: StatefulDevice, http: &HttpChannel) -> DeviceEntry {
+    // IPv6 hosts are bracketed so the port stays unambiguous (RFC 3986).
+    let address = match http.host.contains(':') {
+        true => format!("[{}]:{}", http.host, http.port),
+        false => format!("{}:{}", http.host, http.port),
+    };
     DeviceEntry {
         alias: known.device.alias,
         fingerprint: known.device.fingerprint,

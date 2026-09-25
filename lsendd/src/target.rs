@@ -1,11 +1,10 @@
-use localsend::discovery::{HttpChannel, StatefulDevice};
+use localsend::discovery::{DiscoveryHandle, StatefulDevice};
 use localsend::model::discovery::ProtocolType;
 use localsend::multicast::DEFAULT_PORT;
 use std::net::IpAddr;
 
-/// A `send --to` destination: either a device alias (resolved against the
-/// discovery store) or an IP address (dialed directly, no discovery lookup
-/// needed to find it, only to identify it).
+/// A `send --to` destination: either a device alias (looked up in the
+/// discovery store) or an IP address (asked directly who it is).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TargetSelector {
     Alias(String),
@@ -24,46 +23,31 @@ impl TargetSelector {
         })
     }
 
-    /// A channel to probe directly, so an IP destination is found even when
-    /// multicast does not reach it.
-    pub fn direct_channel(&self) -> Option<HttpChannel> {
-        let Self::Ip(ip) = self else {
-            return None;
-        };
-        Some(HttpChannel {
-            host: ip.to_string(),
-            port: DEFAULT_PORT,
-            protocol: ProtocolType::Https,
-        })
-    }
-
-    pub fn resolve(&self, devices: &[StatefulDevice]) -> Result<String, String> {
-        let matching: Vec<&StatefulDevice> = devices
-            .iter()
-            .filter(|device| self.matches(device))
-            .collect();
-        match matching.as_slice() {
-            [] => Err(format!("Destination {self} was not discovered")),
-            [device] => Ok(device.device.fingerprint.clone()),
-            devices => Err(format!(
-                "Destination {self} is ambiguous ({} devices matched); use an IP address",
-                devices.len()
-            )),
-        }
-    }
-
-    fn matches(&self, device: &StatefulDevice) -> bool {
+    /// Resolves the destination without scanning the network: an alias is
+    /// looked up among the already known devices, an IP address gets a single
+    /// register request.
+    pub async fn resolve(&self, discovery: &DiscoveryHandle) -> Result<StatefulDevice, String> {
         match self {
-            Self::Alias(alias) => device.device.alias == *alias,
-            Self::Ip(ip) => device.get_ranked_channels().into_iter().any(|channel| {
-                channel.http().is_some_and(|http| {
-                    http.host
-                        .split('%')
-                        .next()
-                        .and_then(|host| host.parse::<IpAddr>().ok())
-                        == Some(*ip)
-                })
-            }),
+            Self::Alias(alias) => {
+                let devices = discovery.devices();
+                let matching: Vec<&StatefulDevice> = devices
+                    .iter()
+                    .filter(|device| device.device.alias == *alias)
+                    .collect();
+                match matching.as_slice() {
+                    [] => Err(format!("Destination {self} was not discovered")),
+                    [device] => Ok((*device).clone()),
+                    devices => Err(format!(
+                        "Destination {self} is ambiguous ({} devices matched); use an IP address",
+                        devices.len()
+                    )),
+                }
+            }
+            Self::Ip(ip) => discovery
+                .discover(&ip.to_string(), DEFAULT_PORT, ProtocolType::Https)
+                .await
+                .map_err(|err| format!("Destination {self} did not answer: {err}"))?
+                .ok_or_else(|| format!("Destination {self} is this device")),
         }
     }
 }

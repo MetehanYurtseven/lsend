@@ -2,6 +2,8 @@ use localsend::http::server::common::save::FileUploadTarget;
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
 use localsend::util::filename::{self, Rules};
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
@@ -83,23 +85,27 @@ fn download_dir() -> PathBuf {
     dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// A path in `dir` for `file_name` that does not exist yet, appending
-/// ` (1)`, ` (2)`, ... before the extension on collisions. `file_name` comes
-/// from the sender and is untrusted, so it is sanitized first.
+/// A path in `dir` for `file_name` that did not exist yet, appending
+/// ` (1)`, ` (2)`, ... before the extension on collisions. The file is
+/// created right away to reserve the name, so two uploads with the same name
+/// cannot end up on the same path. `file_name` comes from the sender and is
+/// untrusted, so it is sanitized first.
 fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
     let name = filename::sanitize_path(file_name, Rules::current());
-
-    let candidate = dir.join(&name);
-    if !candidate.exists() {
-        return candidate;
-    }
-
     let (stem, extension) = match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
         _ => (name.as_str(), String::new()),
     };
-    (1..)
-        .map(|i| dir.join(format!("{stem} ({i}){extension}")))
-        .find(|candidate| !candidate.exists())
+
+    std::iter::once(dir.join(&name))
+        .chain((1..).map(|i| dir.join(format!("{stem} ({i}){extension}"))))
+        .find(|candidate| {
+            // Any error other than a collision is left for the core crate to
+            // report when it opens the file.
+            !matches!(
+                OpenOptions::new().write(true).create_new(true).open(candidate),
+                Err(err) if err.kind() == ErrorKind::AlreadyExists
+            )
+        })
         .unwrap()
 }

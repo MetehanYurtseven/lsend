@@ -5,14 +5,12 @@ use localsend::http::client::v2::LsHttpClientV2;
 use localsend::http::dto_v2::PrepareUploadRequestDtoV2;
 use localsend::model::discovery::ProtocolType;
 use localsend::model::transfer::{FileContent, FileDto, FileMetadata};
-use localsend::util::interface::{InterfaceFilter, local_interface_addresses};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-/// Resolves `target` among the discovered devices and sends `paths` to it:
+/// Resolves `target` without scanning the network and sends `paths` to it:
 /// prepare-upload, then one upload request per accepted file. Returns the
 /// number of files actually sent.
 pub async fn send(
@@ -27,26 +25,7 @@ pub async fn send(
         return Err("No files selected".to_string());
     }
 
-    let mut known_channels = Vec::new();
-    if let Some(channel) = target.direct_channel() {
-        known_channels.push(channel);
-    }
-    let interface_ips = local_interface_addresses(&InterfaceFilter::default()).unwrap_or_default();
-    discovery
-        .discover_staged(
-            known_channels,
-            interface_ips,
-            identity.port,
-            ProtocolType::Https,
-            Duration::from_secs(1),
-        )
-        .await
-        .map_err(|err| format!("Discovery failed: {err}"))?;
-
-    let fingerprint = target.resolve(&discovery.devices())?;
-    let device = discovery
-        .device_by_fingerprint(&fingerprint)
-        .ok_or_else(|| format!("Destination {target} was not discovered"))?;
+    let device = target.resolve(discovery).await?;
 
     let http = device
         .get_best_channel()
@@ -59,8 +38,8 @@ pub async fn send(
         ProtocolType::Http => None,
     };
     let client = LsHttpClientV2::try_new(
-        &identity.key_pem,
-        &identity.cert_pem,
+        &identity.cert.private_key_pem,
+        &identity.cert.certificate_pem,
         expected_fingerprint,
         None,
     )

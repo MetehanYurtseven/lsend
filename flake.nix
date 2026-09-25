@@ -39,8 +39,6 @@
       commonArgs = {
         inherit src;
         strictDeps = true;
-        pname = "lsend";
-        version = "0.1.0";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -55,7 +53,22 @@
     {
       packages.${system}.default = lsend;
 
+      checks.${system} = {
+        inherit lsend;
+
+        lsend-clippy = craneLib.cargoClippy (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          }
+        );
+
+        lsend-fmt = craneLib.cargoFmt { inherit src; };
+      };
+
       devShells.${system}.default = craneLib.devShell {
+        checks = self.checks.${system};
         packages = [
           rustToolchain
           pkgs.nil
