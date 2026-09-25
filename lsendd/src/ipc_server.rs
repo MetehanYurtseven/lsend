@@ -5,10 +5,16 @@ use ipc::{
     write_message,
 };
 use localsend::discovery::DiscoveryHandle;
+use localsend::model::discovery::ProtocolType;
+use localsend::util::interface::{InterfaceFilter, local_interface_addresses};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use tokio::io::BufReader;
 use tokio::net::{UnixListener, UnixStream};
+
+/// How long a `list` scan waits for devices to answer before returning.
+const LIST_SCAN_GRACE: Duration = Duration::from_secs(1);
 
 /// The Unix domain socket `lsendctl` connects to.
 pub struct IpcServer {
@@ -55,7 +61,7 @@ pub async fn handle_connection(
     let response = match read_message::<_, Request>(&mut reader).await? {
         Some(Request::Status) => Response::Status(status),
         Some(Request::List) => Response::List {
-            devices: list_devices(&discovery),
+            devices: list_devices(&identity, &discovery).await,
         },
         Some(Request::Send { target, paths }) => {
             match send::send(&identity, &discovery, &target, paths).await {
@@ -68,10 +74,33 @@ pub async fn handle_connection(
     write_message(&mut write_half, &response).await
 }
 
-fn list_devices(discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
+/// Scans the network and returns only the devices that answered this scan,
+/// so a device that has gone offline since it was last seen does not linger.
+async fn list_devices(identity: &Identity, discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
+    let scan_start = SystemTime::now();
+    let interface_ips = local_interface_addresses(&InterfaceFilter::default()).unwrap_or_default();
+    if let Err(err) = discovery
+        .discover_staged(
+            Vec::new(),
+            interface_ips,
+            identity.port,
+            ProtocolType::Https,
+            LIST_SCAN_GRACE,
+        )
+        .await
+    {
+        eprintln!("List scan failed: {err}");
+    }
+
     discovery
         .devices()
         .into_iter()
+        .filter(|known| {
+            known
+                .logs
+                .last()
+                .is_some_and(|log| log.timestamp >= scan_start)
+        })
         .map(|known| {
             let address = known
                 .get_best_channel()
