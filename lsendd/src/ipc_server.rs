@@ -1,3 +1,5 @@
+use crate::identity::Identity;
+use crate::send;
 use ipc::{
     DeviceEntry, DeviceType, Request, Response, StatusResponse, read_message, socket_path,
     write_message,
@@ -45,6 +47,7 @@ impl Drop for IpcServer {
 pub async fn handle_connection(
     stream: UnixStream,
     status: StatusResponse,
+    identity: Arc<Identity>,
     discovery: Arc<DiscoveryHandle>,
 ) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
@@ -54,6 +57,12 @@ pub async fn handle_connection(
         Some(Request::List) => Response::List {
             devices: list_devices(&discovery),
         },
+        Some(Request::Send { target, paths }) => {
+            match send::send(&identity, &discovery, &target, paths).await {
+                Ok(sent_files) => Response::Send { sent_files },
+                Err(message) => Response::Error { message },
+            }
+        }
         None => return Ok(()),
     };
     write_message(&mut write_half, &response).await

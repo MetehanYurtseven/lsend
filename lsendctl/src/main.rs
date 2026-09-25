@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use ipc::{DeviceEntry, Request, Response, read_message, socket_path, write_message};
+use std::path::PathBuf;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
 
@@ -16,6 +17,15 @@ enum Command {
     Status,
     /// List devices discovered so far.
     List,
+    /// Send files to a device, by alias or IP address.
+    Send {
+        /// Destination alias or IP address.
+        #[arg(long = "to")]
+        to: String,
+        /// Files to send.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -24,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let request = match cli.command {
         Command::Status => Request::Status,
         Command::List => Request::List,
+        Command::Send { to, paths } => Request::Send { target: to, paths },
     };
 
     let path = socket_path()?;
@@ -45,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             println!("port: {}", status.port);
         }
         Response::List { devices } => print_devices(&devices),
+        Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
         Response::Error { message } => anyhow::bail!("lsendd error: {message}"),
     }
 

@@ -2,7 +2,9 @@ mod daemon;
 mod discovery;
 mod identity;
 mod ipc_server;
+mod send;
 mod server;
+mod target;
 
 use daemon::Daemon;
 use localsend::multicast::DEFAULT_PORT;

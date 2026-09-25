@@ -8,3 +8,6 @@ localsend = { git = "https://github.com/localsend/localsend", package = "localse
 ipc = { path = "../ipc" }
 anyhow = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "fs"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+mime_guess = "2.0"

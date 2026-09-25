@@ -1,5 +1,5 @@
 use crate::discovery::Discovery;
-use crate::identity;
+use crate::identity::{self, Identity};
 use crate::ipc_server::IpcServer;
 use crate::server::{self, Server};
 use ipc::StatusResponse;
@@ -11,6 +11,7 @@ use tokio::net::UnixStream;
 /// to a clean shutdown.
 pub struct Daemon {
     status: StatusResponse,
+    identity: Arc<Identity>,
     server: Server,
     discovery: Discovery,
     ipc: IpcServer,
@@ -20,6 +21,7 @@ impl Daemon {
     pub async fn start(alias: String, port: u16) -> anyhow::Result<Self> {
         let cert = identity::generate()?;
         println!("Generated identity, fingerprint: {}", cert.fingerprint);
+        let identity = Arc::new(Identity::new(&cert, alias.clone(), port));
 
         let server = Server::start(&cert, &alias, port).await?;
         println!("HTTP server listening on port {port}");
@@ -37,6 +39,7 @@ impl Daemon {
                 fingerprint: cert.fingerprint,
                 port,
             },
+            identity,
             server,
             discovery,
             ipc,
@@ -53,6 +56,7 @@ impl Daemon {
                     Ok(stream) => spawn_ipc_connection(
                         stream,
                         self.status.clone(),
+                        self.identity.clone(),
                         self.discovery.handle.clone(),
                     ),
                     Err(err) => eprintln!("IPC accept failed: {err:#}"),
@@ -73,10 +77,13 @@ impl Daemon {
 fn spawn_ipc_connection(
     stream: UnixStream,
     status: StatusResponse,
+    identity: Arc<Identity>,
     discovery: Arc<DiscoveryHandle>,
 ) {
     tokio::spawn(async move {
-        if let Err(err) = crate::ipc_server::handle_connection(stream, status, discovery).await {
+        if let Err(err) =
+            crate::ipc_server::handle_connection(stream, status, identity, discovery).await
+        {
             eprintln!("IPC connection error: {err:#}");
         }
     });

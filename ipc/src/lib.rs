@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub enum Request {
     Status,
     List,
+    Send { target: String, paths: Vec<PathBuf> },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -15,6 +16,7 @@ pub enum Request {
 pub enum Response {
     Status(StatusResponse),
     List { devices: Vec<DeviceEntry> },
+    Send { sent_files: usize },
     Error { message: String },
 }
 
