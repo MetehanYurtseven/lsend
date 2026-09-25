@@ -4,17 +4,16 @@ use ipc::{
     DeviceEntry, DeviceType, Request, Response, StatusResponse, read_message, socket_path,
     write_message,
 };
-use localsend::discovery::DiscoveryHandle;
-use localsend::model::discovery::ProtocolType;
-use localsend::util::interface::{InterfaceFilter, local_interface_addresses};
+use localsend::discovery::{DiscoveryHandle, StatefulDevice};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::io::BufReader;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpStream, UnixListener, UnixStream};
 
-/// How long a `list` scan waits for devices to answer before returning.
-const LIST_SCAN_GRACE: Duration = Duration::from_secs(1);
+/// How long `list` waits for a device to answer a TCP connect before giving
+/// up on it.
+const LIST_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The Unix domain socket `lsendctl` connects to.
 pub struct IpcServer {
@@ -61,7 +60,7 @@ pub async fn handle_connection(
     let response = match read_message::<_, Request>(&mut reader).await? {
         Some(Request::Status) => Response::Status(status),
         Some(Request::List) => Response::List {
-            devices: list_devices(&identity, &discovery).await,
+            devices: list_devices(&discovery).await,
         },
         Some(Request::Send { target, paths }) => {
             match send::send(&identity, &discovery, &target, paths).await {
@@ -74,47 +73,49 @@ pub async fn handle_connection(
     write_message(&mut write_half, &response).await
 }
 
-/// Scans the network and returns only the devices that answered this scan,
-/// so a device that has gone offline since it was last seen does not linger.
-async fn list_devices(identity: &Identity, discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
-    let scan_start = SystemTime::now();
-    let interface_ips = local_interface_addresses(&InterfaceFilter::default()).unwrap_or_default();
-    if let Err(err) = discovery
-        .discover_staged(
-            Vec::new(),
-            interface_ips,
-            identity.port,
-            ProtocolType::Https,
-            LIST_SCAN_GRACE,
-        )
-        .await
-    {
-        eprintln!("List scan failed: {err}");
+/// Returns the known devices that are currently reachable: a plain TCP
+/// connect to each device's best channel, in parallel, no LocalSend protocol
+/// involved. Devices that no longer answer are left out, without touching
+/// the underlying discovery store.
+async fn list_devices(discovery: &DiscoveryHandle) -> Vec<DeviceEntry> {
+    let mut checks = tokio::task::JoinSet::new();
+    for known in discovery.devices() {
+        checks.spawn(async move { is_reachable(&known).await.then(|| to_entry(known)) });
     }
 
-    discovery
-        .devices()
-        .into_iter()
-        .filter(|known| {
-            known
-                .logs
-                .last()
-                .is_some_and(|log| log.timestamp >= scan_start)
-        })
-        .map(|known| {
-            let address = known
-                .get_best_channel()
-                .and_then(|channel| channel.http())
-                .map(|http| format!("{}:{}", http.host, http.port))
-                .unwrap_or_default();
-            DeviceEntry {
-                alias: known.device.alias,
-                fingerprint: known.device.fingerprint,
-                address,
-                device_type: known.device.device_type.map(map_device_type),
-            }
-        })
-        .collect()
+    let mut devices = Vec::new();
+    while let Some(result) = checks.join_next().await {
+        if let Ok(Some(entry)) = result {
+            devices.push(entry);
+        }
+    }
+    devices
+}
+
+async fn is_reachable(known: &StatefulDevice) -> bool {
+    let Some(http) = known.get_best_channel().and_then(|channel| channel.http()) else {
+        return false;
+    };
+    tokio::time::timeout(
+        LIST_PROBE_TIMEOUT,
+        TcpStream::connect((http.host.as_str(), http.port)),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
+}
+
+fn to_entry(known: StatefulDevice) -> DeviceEntry {
+    let address = known
+        .get_best_channel()
+        .and_then(|channel| channel.http())
+        .map(|http| format!("{}:{}", http.host, http.port))
+        .unwrap_or_default();
+    DeviceEntry {
+        alias: known.device.alias,
+        fingerprint: known.device.fingerprint,
+        address,
+        device_type: known.device.device_type.map(map_device_type),
+    }
 }
 
 fn map_device_type(device_type: localsend::model::discovery::DeviceType) -> DeviceType {
