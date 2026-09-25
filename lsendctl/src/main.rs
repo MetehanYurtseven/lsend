@@ -1,5 +1,9 @@
 use clap::{Parser, Subcommand};
-use ipc::{DeviceEntry, PendingEntry, Request, Response, read_message, socket_path, write_message};
+use ipc::{
+    DeviceEntry, PendingEntry, Request, Response, SendPayload, read_message, socket_path,
+    write_message,
+};
+use std::io::Read;
 use std::path::PathBuf;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
@@ -25,14 +29,19 @@ enum Command {
         #[arg(long)]
         fingerprint: bool,
     },
-    /// Send files or directories to a device, by alias or IP address.
+    /// Send files, directories, or a text message to a device, by alias or
+    /// IP address.
     Send {
         /// Destination alias or IP address.
         #[arg(long = "to")]
         to: String,
         /// Files or directories (sent recursively) to send.
-        #[arg(required = true)]
+        #[arg(required_unless_present = "text", conflicts_with = "text")]
         paths: Vec<PathBuf>,
+        /// Send a text message instead of files. Use `-` to read it from
+        /// stdin, unchanged.
+        #[arg(long)]
+        text: Option<String>,
     },
     /// Show the incoming request waiting for a decision: alias, address,
     /// fingerprint, content (tab-separated). Prints nothing when there is
@@ -59,7 +68,21 @@ async fn main() -> anyhow::Result<()> {
     let (request, show_fingerprint) = match cli.command {
         Command::Status => (Request::Status, false),
         Command::List { fingerprint } => (Request::List, fingerprint),
-        Command::Send { to, paths } => (Request::Send { target: to, paths }, false),
+        Command::Send { to, paths, text } => {
+            let payload = match text {
+                Some(text) => SendPayload::Text {
+                    text: resolve_text(text)?,
+                },
+                None => SendPayload::Files { paths },
+            };
+            (
+                Request::Send {
+                    target: to,
+                    payload,
+                },
+                false,
+            )
+        }
         Command::Pending => (Request::Pending, false),
         Command::Accept { from } => (Request::Accept { from }, false),
         Command::Decline { from } => (Request::Decline { from }, false),
@@ -86,6 +109,15 @@ async fn main() -> anyhow::Result<()> {
             println!("port: {}", status.port);
         }
         Response::List { devices } => print_devices(&devices, show_fingerprint),
+        // A text message has no files to count, success is the exit code.
+        Response::Send { .. }
+            if matches!(
+                request,
+                Request::Send {
+                    payload: SendPayload::Text { .. },
+                    ..
+                }
+            ) => {}
         Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
         Response::Pending { request } => {
             if let Some(request) = request {
@@ -98,6 +130,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolves `--text`'s value: `-` reads stdin fully, anything else is used
+/// as-is.
+fn resolve_text(text: String) -> anyhow::Result<String> {
+    if text != "-" {
+        return Ok(text);
+    }
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 fn print_pending(request: &PendingEntry) {

@@ -60,8 +60,8 @@ pub async fn handle_connection(
         Some(Request::List) => Response::List {
             devices: list_devices(&discovery).await,
         },
-        Some(Request::Send { target, paths }) => {
-            match send::send(&identity, &discovery, &target, paths).await {
+        Some(Request::Send { target, payload }) => {
+            match send::send(&identity, &discovery, &target, payload).await {
                 Ok(sent_files) => Response::Send { sent_files },
                 Err(message) => Response::Error { message },
             }

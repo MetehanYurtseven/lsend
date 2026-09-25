@@ -1,5 +1,6 @@
 use crate::identity::Identity;
 use crate::target::TargetSelector;
+use ipc::SendPayload;
 use localsend::discovery::DiscoveryHandle;
 use localsend::http::client::v2::LsHttpClientV2;
 use localsend::http::dto_v2::PrepareUploadRequestDtoV2;
@@ -12,17 +13,20 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-/// Resolves `target` without scanning the network and sends `paths` to it:
+/// Resolves `target` without scanning the network and sends `content` to it:
 /// prepare-upload, then one upload request per accepted file. Returns the
 /// number of files actually sent.
 pub async fn send(
     identity: &Identity,
     discovery: &DiscoveryHandle,
     target: &str,
-    paths: Vec<PathBuf>,
+    content: SendPayload,
 ) -> Result<usize, String> {
     let target = TargetSelector::parse(target)?;
-    let (files, file_paths) = collect_files(paths)?;
+    let (files, file_paths) = match content {
+        SendPayload::Files { paths } => collect_files(paths)?,
+        SendPayload::Text { text } => collect_text(text),
+    };
     if files.is_empty() {
         return Err("No files selected".to_string());
     }
@@ -66,6 +70,11 @@ pub async fn send(
         .map_err(|err| format!("Failed to prepare upload: {err}"))?;
 
     let Some(response) = prepared.response else {
+        // Only a text message has no paths. Its receiver reads it from the
+        // request and answers 204 without asking for an upload.
+        if file_paths.is_empty() {
+            return Ok(0);
+        }
         return Err("All files were declined".to_string());
     };
 
@@ -76,7 +85,10 @@ pub async fn send(
     let mut sent_files = 0usize;
     for file_id in file_ids {
         let token = &response.files[file_id];
-        let path = file_paths[file_id].clone();
+        // A text message has no path; skip it if a receiver asks for it anyway.
+        let Some(path) = file_paths.get(file_id).cloned() else {
+            continue;
+        };
         let body = localsend::reqwest::Body::wrap_stream(FileContent::Path(path).into_stream());
 
         match client
@@ -137,6 +149,23 @@ fn collect_files(paths: Vec<PathBuf>) -> Result<CollectedFiles, String> {
         }
     }
     Ok((files, file_paths))
+}
+
+/// A single text message as a transfer: one file whose content is embedded
+/// in `preview`, matching how the official app sends a message. It has no
+/// path, the receiver reads it from the request.
+fn collect_text(text: String) -> CollectedFiles {
+    let id = Uuid::new_v4().to_string();
+    let file = FileDto {
+        id: id.clone(),
+        file_name: format!("{id}.txt"),
+        size: text.len() as u64,
+        file_type: "text/plain".to_string(),
+        sha256: None,
+        preview: Some(text),
+        metadata: None,
+    };
+    (HashMap::from([(id, file)]), HashMap::new())
 }
 
 /// Expands `path` into the files to send, each with its protocol file name.

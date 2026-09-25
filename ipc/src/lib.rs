@@ -10,7 +10,7 @@ pub enum Request {
     List,
     Send {
         target: String,
-        paths: Vec<PathBuf>,
+        payload: SendPayload,
     },
     Pending,
     /// `from` only decides the pending request if its sender has that
@@ -44,6 +44,13 @@ pub enum Response {
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SendPayload {
+    Files { paths: Vec<PathBuf> },
+    Text { text: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
