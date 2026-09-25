@@ -34,25 +34,14 @@
       };
 
       craneLib = (crane.mkLib pkgs).overrideToolchain (_: rustToolchain);
-      src = craneLib.cleanCargoSource ./.;
 
-      commonArgs = {
-        inherit src;
-        strictDeps = true;
-      };
-
-      cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-      lsend = craneLib.buildPackage (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-          meta.mainProgram = "lsendctl";
-        }
-      );
+      lsend = import ./nix/package.nix { inherit craneLib; };
+      inherit (lsend.passthru) commonArgs cargoArtifacts;
     in
     {
       packages.${system}.default = lsend;
+
+      nixosModules.default = import ./nix/module.nix self;
 
       checks.${system} = {
         inherit lsend;
@@ -65,7 +54,7 @@
           }
         );
 
-        lsend-fmt = craneLib.cargoFmt { inherit src; };
+        lsend-fmt = craneLib.cargoFmt { inherit (commonArgs) src; };
       };
 
       devShells.${system}.default = craneLib.devShell {
