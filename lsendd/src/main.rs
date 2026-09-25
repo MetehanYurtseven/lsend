@@ -1,6 +1,7 @@
 mod daemon;
 mod discovery;
 mod identity;
+mod ipc_server;
 mod server;
 
 use daemon::Daemon;

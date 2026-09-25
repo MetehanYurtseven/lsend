@@ -1,12 +1,17 @@
 use crate::discovery::Discovery;
 use crate::identity;
+use crate::ipc_server::IpcServer;
 use crate::server::{self, Server};
+use ipc::StatusResponse;
+use tokio::net::UnixStream;
 
-/// The daemon's lifecycle: identity, server and discovery, from start to a
-/// clean shutdown.
+/// The daemon's lifecycle: identity, server, discovery and IPC, from start
+/// to a clean shutdown.
 pub struct Daemon {
+    status: StatusResponse,
     server: Server,
     discovery: Discovery,
+    ipc: IpcServer,
 }
 
 impl Daemon {
@@ -17,11 +22,23 @@ impl Daemon {
         let server = Server::start(&cert, &alias, port).await?;
         println!("HTTP server listening on port {port}");
 
-        let discovery = Discovery::start(&cert, alias, port).await?;
+        let discovery = Discovery::start(&cert, alias.clone(), port).await?;
         println!("Announcing on the network...");
         discovery.announce().await;
 
-        Ok(Self { server, discovery })
+        let ipc = IpcServer::bind().await?;
+        println!("IPC socket listening at {}", ipc.path().display());
+
+        Ok(Self {
+            status: StatusResponse {
+                alias,
+                fingerprint: cert.fingerprint,
+                port,
+            },
+            server,
+            discovery,
+            ipc,
+        })
     }
 
     /// Runs the event loop until Ctrl+C is pressed.
@@ -30,6 +47,10 @@ impl Daemon {
         loop {
             tokio::select! {
                 Some(event) = self.server.events.recv() => server::handle_event(event),
+                accept_result = self.ipc.accept() => match accept_result {
+                    Ok(stream) => spawn_ipc_connection(stream, self.status.clone()),
+                    Err(err) => eprintln!("IPC accept failed: {err:#}"),
+                },
                 _ = tokio::signal::ctrl_c() => break,
             }
         }
@@ -41,4 +62,12 @@ impl Daemon {
         self.discovery.shutdown().await;
         println!("Stopped.");
     }
+}
+
+fn spawn_ipc_connection(stream: UnixStream, status: StatusResponse) {
+    tokio::spawn(async move {
+        if let Err(err) = crate::ipc_server::handle_connection(stream, status).await {
+            eprintln!("IPC connection error: {err:#}");
+        }
+    });
 }
