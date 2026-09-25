@@ -49,10 +49,16 @@ impl Receiver {
                 let path = unique_path(&download_dir(), &file.file_name);
                 println!("Receiving {}", path.display());
                 let (result_tx, result_rx) = oneshot::channel();
-                let log_path = path.clone();
+                let reserved_path = path.clone();
                 tokio::spawn(async move {
-                    if let Ok(Err(err)) = result_rx.await {
-                        eprintln!("Failed to save {}: {err}", log_path.display());
+                    // A dropped channel means the upload never completed.
+                    let result = result_rx
+                        .await
+                        .unwrap_or_else(|_| Err("Upload aborted".to_string()));
+                    if let Err(err) = result {
+                        eprintln!("Failed to save {}: {err}", reserved_path.display());
+                        // Remove the reserved, possibly partial file.
+                        let _ = tokio::fs::remove_file(&reserved_path).await;
                     }
                 });
                 let _ = target_tx.send(FileUploadTarget::Path {
