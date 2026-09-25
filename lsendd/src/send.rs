@@ -6,9 +6,11 @@ use localsend::http::dto_v2::PrepareUploadRequestDtoV2;
 use localsend::model::discovery::ProtocolType;
 use localsend::model::transfer::{FileContent, FileDto, FileMetadata};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::Metadata;
+use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 /// Resolves `target` without scanning the network and sends `paths` to it:
 /// prepare-upload, then one upload request per accepted file. Returns the
@@ -110,38 +112,84 @@ pub async fn send(
 type CollectedFiles = (HashMap<String, FileDto>, HashMap<String, PathBuf>);
 
 /// Stats `paths` into transfer metadata keyed by a fresh file ID, plus the
-/// paths under the same IDs. Only individual files are supported; a path
-/// that is not a regular file is an error.
+/// paths under the same IDs. Directories are expanded, see [`expand_path`].
 fn collect_files(paths: Vec<PathBuf>) -> Result<CollectedFiles, String> {
     let mut files = HashMap::new();
     let mut file_paths = HashMap::new();
     for path in paths {
-        let metadata =
-            std::fs::metadata(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-        if !metadata.is_file() {
-            return Err(format!("{}: not a regular file", path.display()));
+        for (path, metadata, file_name) in expand_path(&path)? {
+            let id = Uuid::new_v4().to_string();
+            files.insert(
+                id.clone(),
+                FileDto {
+                    id: id.clone(),
+                    file_name,
+                    size: metadata.len(),
+                    file_type: mime_guess::from_path(&path)
+                        .first_or_octet_stream()
+                        .to_string(),
+                    sha256: None,
+                    preview: None,
+                    metadata: FileMetadata::from_fs_metadata(&metadata),
+                },
+            );
+            file_paths.insert(id, path);
         }
-        let file_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| format!("{}: has no file name", path.display()))?;
-
-        let id = Uuid::new_v4().to_string();
-        files.insert(
-            id.clone(),
-            FileDto {
-                id: id.clone(),
-                file_name,
-                size: metadata.len(),
-                file_type: mime_guess::from_path(&path)
-                    .first_or_octet_stream()
-                    .to_string(),
-                sha256: None,
-                preview: None,
-                metadata: FileMetadata::from_fs_metadata(&metadata),
-            },
-        );
-        file_paths.insert(id, path);
     }
     Ok((files, file_paths))
+}
+
+/// Expands `path` into the files to send, each with its protocol file name.
+/// A directory is walked recursively and its files are named by their path
+/// including the directory itself (`photos/2024/a.jpg`), so the receiver can
+/// rebuild the tree, as the official app does.
+fn expand_path(path: &Path) -> Result<Vec<(PathBuf, Metadata, String)>, String> {
+    let metadata = std::fs::metadata(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    // `file_name` is `None` for paths like `..`, so fall back to the
+    // resolved path.
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .or_else(|| {
+            path.canonicalize()
+                .ok()?
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .ok_or_else(|| format!("{}: has no file name", path.display()))?;
+
+    if metadata.is_file() {
+        return Ok(vec![(path.to_path_buf(), metadata, name)]);
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "{}: not a regular file or directory",
+            path.display()
+        ));
+    }
+
+    let mut expanded = Vec::new();
+    for entry in WalkDir::new(path).min_depth(1).sort_by_file_name() {
+        let entry = entry.map_err(|err| err.to_string())?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("{}: {err}", entry.path().display()))?;
+        let relative = entry
+            .path()
+            .strip_prefix(path)
+            .expect("walkdir yields paths below its root");
+        let file_name = std::iter::once(name.clone())
+            .chain(
+                relative
+                    .iter()
+                    .map(|segment| segment.to_string_lossy().into_owned()),
+            )
+            .collect::<Vec<_>>()
+            .join("/");
+        expanded.push((entry.into_path(), metadata, file_name));
+    }
+    Ok(expanded)
 }

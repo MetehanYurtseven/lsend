@@ -94,10 +94,28 @@ fn download_dir() -> PathBuf {
 /// A path in `dir` for `file_name` that did not exist yet, appending
 /// ` (1)`, ` (2)`, ... before the extension on collisions. The file is
 /// created right away to reserve the name, so two uploads with the same name
-/// cannot end up on the same path. `file_name` comes from the sender and is
-/// untrusted, so it is sanitized first.
+/// cannot end up on the same path.
+///
+/// `file_name` may be a relative path (`photos/2024/a.jpg`) when a folder is
+/// sent; its directories are recreated below `dir`. It comes from the sender
+/// and is untrusted, so `.` and `..` segments are dropped and every segment
+/// is sanitized, keeping the result inside `dir`.
 fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
-    let name = filename::sanitize_path(file_name, Rules::current());
+    let rules = Rules::current();
+    let mut segments: Vec<String> = file_name
+        .split(['/', '\\'])
+        .filter(|segment| !matches!(*segment, "" | "." | ".."))
+        .map(|segment| filename::sanitize(segment, rules))
+        .collect();
+    let name = segments
+        .pop()
+        .unwrap_or_else(|| filename::sanitize("", rules));
+    let dir = segments
+        .iter()
+        .fold(dir.to_path_buf(), |dir, segment| dir.join(segment));
+    // A failure surfaces when the core crate opens the file.
+    let _ = std::fs::create_dir_all(&dir);
+
     let (stem, extension) = match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
         _ => (name.as_str(), String::new()),

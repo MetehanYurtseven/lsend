@@ -25,12 +25,12 @@ enum Command {
         #[arg(long)]
         fingerprint: bool,
     },
-    /// Send files to a device, by alias or IP address.
+    /// Send files or directories to a device, by alias or IP address.
     Send {
         /// Destination alias or IP address.
         #[arg(long = "to")]
         to: String,
-        /// Files to send.
+        /// Files or directories (sent recursively) to send.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
