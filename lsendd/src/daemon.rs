@@ -21,9 +21,11 @@ pub struct Daemon {
 
 impl Daemon {
     pub async fn start(alias: String, port: u16) -> anyhow::Result<Self> {
-        let identity = Arc::new(Identity::generate(alias, port)?);
+        let identity_path = Identity::path()?;
+        let identity = Arc::new(Identity::load_or_generate(&identity_path, alias, port)?);
         println!(
-            "Generated identity, fingerprint: {}",
+            "Identity {}, fingerprint: {}",
+            identity_path.display(),
             identity.fingerprint()
         );
 

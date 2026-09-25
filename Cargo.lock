@@ -1131,6 +1131,7 @@ dependencies = [
  "ipc",
  "localsend",
  "mime_guess",
+ "pem",
  "tokio",
  "tokio-util",
  "uuid",
