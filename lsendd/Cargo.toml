@@ -12,3 +12,4 @@ tokio-util = { version = "0.7", features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2.0"
 dirs = "6.0"
+gethostname = "1.0"
