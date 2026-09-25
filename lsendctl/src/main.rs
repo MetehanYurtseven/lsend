@@ -16,7 +16,11 @@ enum Command {
     /// Show the daemon's identity and status.
     Status,
     /// List devices discovered so far.
-    List,
+    List {
+        /// Show each device's fingerprint.
+        #[arg(long)]
+        fingerprint: bool,
+    },
     /// Send files to a device, by alias or IP address.
     Send {
         /// Destination alias or IP address.
@@ -31,9 +35,10 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let show_fingerprint = matches!(cli.command, Command::List { fingerprint: true });
     let request = match cli.command {
         Command::Status => Request::Status,
-        Command::List => Request::List,
+        Command::List { .. } => Request::List,
         Command::Send { to, paths } => Request::Send { target: to, paths },
     };
 
@@ -55,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
             println!("fingerprint: {}", status.fingerprint);
             println!("port: {}", status.port);
         }
-        Response::List { devices } => print_devices(&devices),
+        Response::List { devices } => print_devices(&devices, show_fingerprint),
         Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
         Response::Error { message } => anyhow::bail!("lsendd error: {message}"),
     }
@@ -63,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_devices(devices: &[DeviceEntry]) {
+fn print_devices(devices: &[DeviceEntry], show_fingerprint: bool) {
     if devices.is_empty() {
         println!("No devices discovered yet.");
         return;
@@ -74,9 +79,13 @@ fn print_devices(devices: &[DeviceEntry]) {
             .as_ref()
             .map(|t| format!("{t:?}"))
             .unwrap_or_else(|| "unknown".to_string());
-        println!(
-            "{}\t{}\t{}\t{}",
-            device.alias, device.fingerprint, device.address, device_type
-        );
+        if show_fingerprint {
+            println!(
+                "{}\t{}\t{}\t{}",
+                device.alias, device.fingerprint, device.address, device_type
+            );
+        } else {
+            println!("{}\t{}\t{}", device.alias, device.address, device_type);
+        }
     }
 }
