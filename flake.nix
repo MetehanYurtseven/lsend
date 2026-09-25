@@ -35,7 +35,10 @@
 
       craneLib = (crane.mkLib pkgs).overrideToolchain (_: rustToolchain);
 
-      lsend = import ./nix/package.nix { inherit craneLib; };
+      lsend = import ./nix/package.nix {
+              inherit craneLib;
+              inherit (pkgs) lib;
+            };
       inherit (lsend.passthru) commonArgs cargoArtifacts;
     in
     {

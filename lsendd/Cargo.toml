@@ -2,6 +2,7 @@
 name = "lsendd"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 localsend = { git = "https://github.com/localsend/localsend", package = "localsend", rev = "e768240d1ad95f0f162b852b5ff37bec71cde1ef", features = ["discovery", "http"] }

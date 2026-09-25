@@ -5,6 +5,7 @@ members = ["lsendd", "lsendctl", "ipc"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [workspace.metadata.crane]
 name = "lsend"

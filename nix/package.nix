@@ -1,4 +1,4 @@
-{ craneLib }:
+{ craneLib, lib }:
 let
   commonArgs = {
     src = craneLib.cleanCargoSource ../.;
@@ -13,6 +13,9 @@ craneLib.buildPackage (
     inherit cargoArtifacts;
     # Reused by the clippy and fmt checks in flake.nix.
     passthru = { inherit commonArgs cargoArtifacts; };
-    meta.mainProgram = "lsendctl";
+    meta = {
+      mainProgram = "lsendctl";
+      license = lib.licenses.mit;
+    };
   }
 )
