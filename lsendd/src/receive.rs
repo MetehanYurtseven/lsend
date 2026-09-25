@@ -1,3 +1,6 @@
+use localsend::discovery::{DeviceChannel, DiscoveredDevice, DiscoveryHandle, HttpChannel};
+use localsend::http::dto_v2::RegisterDtoV2;
+use localsend::http::server::PeerIp;
 use localsend::http::server::common::save::FileUploadTarget;
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
 use localsend::util::filename::{self, Rules};
@@ -5,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 /// Handles incoming server events: accepts every upload request and writes
@@ -12,12 +16,16 @@ use tokio::sync::oneshot;
 pub struct Receiver {
     /// Alias of the sender for each active session, for logging.
     sessions: HashMap<String, String>,
+    discovery: Arc<DiscoveryHandle>,
+    own_fingerprint: String,
 }
 
 impl Receiver {
-    pub fn new() -> Self {
+    pub fn new(discovery: Arc<DiscoveryHandle>, own_fingerprint: String) -> Self {
         Self {
             sessions: HashMap::new(),
+            discovery,
+            own_fingerprint,
         }
     }
 
@@ -25,6 +33,7 @@ impl Receiver {
         match event {
             ServerEventV2::Register { ip, info } => {
                 println!("Register from {ip}: {} ({})", info.alias, info.fingerprint);
+                self.device_confirmed(ip, info);
             }
             ServerEventV2::PrepareUpload {
                 session_id,
@@ -39,6 +48,8 @@ impl Receiver {
                     info.alias,
                     files.len()
                 );
+                // The sender is clearly reachable.
+                self.device_confirmed(ip, info.clone());
                 self.sessions.insert(session_id, info.alias);
                 let ids: HashSet<String> = files.keys().cloned().collect();
                 let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(ids));
@@ -82,6 +93,32 @@ impl Receiver {
                 eprintln!("Server listener failed: {error}");
             }
         }
+    }
+
+    /// Feeds a device confirmed outside of discovery (it registered with the
+    /// HTTP server or sent a transfer request) into the discovery store. The
+    /// server does not do this itself, it has no access to the store.
+    fn device_confirmed(&self, ip: PeerIp, info: RegisterDtoV2) {
+        if info.fingerprint == self.own_fingerprint {
+            return;
+        }
+        let device = DiscoveredDevice {
+            alias: info.alias,
+            version: info.version,
+            device_model: info.device_model,
+            device_type: info.device_type,
+            fingerprint: info.fingerprint,
+            channel: DeviceChannel::Http(HttpChannel {
+                host: ip.to_string(),
+                port: info.port,
+                protocol: info.protocol,
+            }),
+            download: info.download,
+        };
+        let discovery = self.discovery.clone();
+        tokio::spawn(async move {
+            discovery.add_device(device).await;
+        });
     }
 }
 

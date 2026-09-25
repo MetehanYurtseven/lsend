@@ -39,10 +39,12 @@ impl Daemon {
         let ipc = IpcServer::bind().await?;
         println!("IPC socket listening at {}", ipc.path().display());
 
+        let receiver = Receiver::new(discovery.handle.clone(), identity.fingerprint().to_string());
+
         Ok(Self {
             identity,
             server,
-            receiver: Receiver::new(),
+            receiver,
             discovery,
             ipc,
             sigterm: signal(SignalKind::terminate())?,
