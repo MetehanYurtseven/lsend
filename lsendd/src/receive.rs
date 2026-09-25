@@ -1,8 +1,10 @@
+use crate::pending::{Content, PendingRequest, SharedPending};
+use crate::policy::AcceptPolicy;
 use localsend::discovery::{DeviceChannel, DiscoveredDevice, DiscoveryHandle, HttpChannel};
 use localsend::http::dto_v2::RegisterDtoV2;
 use localsend::http::server::PeerIp;
 use localsend::http::server::common::save::FileUploadTarget;
-use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
+use localsend::http::server::v2::ServerEventV2;
 use localsend::model::transfer::FileDto;
 use localsend::util::filename::{self, Rules};
 use std::collections::{HashMap, HashSet};
@@ -11,28 +13,41 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
-/// Handles incoming server events: accepts every upload request and writes
-/// files into the XDG download directory, resolving name collisions. Text
-/// messages are handed to the `on_text` command instead.
+/// How long a request waits for `lsendctl accept` or `decline`. It holds the
+/// server's only session slot meanwhile, so other senders get 409.
+const PENDING_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Handles incoming server events: accepts upload requests as the accept
+/// policy allows, queueing the others as pending, and writes files into the
+/// XDG download directory, resolving name collisions. Automatically accepted
+/// text messages are handed to the `on_text` command instead.
 pub struct Receiver {
-    /// Alias of the sender for each active session, for logging.
-    sessions: HashMap<String, String>,
     discovery: Arc<DiscoveryHandle>,
     own_fingerprint: String,
     on_text: String,
+    accept: AcceptPolicy,
+    pending: SharedPending,
 }
 
 impl Receiver {
-    pub fn new(discovery: Arc<DiscoveryHandle>, own_fingerprint: String, on_text: String) -> Self {
+    pub fn new(
+        discovery: Arc<DiscoveryHandle>,
+        own_fingerprint: String,
+        on_text: String,
+        accept: AcceptPolicy,
+        pending: SharedPending,
+    ) -> Self {
         Self {
-            sessions: HashMap::new(),
             discovery,
             own_fingerprint,
             on_text,
+            accept,
+            pending,
         }
     }
 
@@ -48,29 +63,42 @@ impl Receiver {
                 session_id,
                 ip,
                 info,
+                cert_fingerprint,
                 files,
                 decision_tx,
-                ..
             } => {
                 // The sender is clearly reachable.
                 self.device_confirmed(ip, info.clone());
 
-                if let Some(message) = message_of(&files) {
-                    // The text is the request itself: accepting no file ends
-                    // it with 204, nothing is uploaded.
-                    let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(HashSet::new()));
-                    run_on_text(self.on_text.clone(), message.to_string());
+                let content = match message_of(&files) {
+                    Some(text) => Content::Text(text.to_string()),
+                    None => Content::Files(files.keys().cloned().collect::<HashSet<_>>()),
+                };
+                let request = PendingRequest {
+                    session_id,
+                    alias: info.alias,
+                    // Proven by the TLS handshake, unlike the claimed one.
+                    fingerprint: cert_fingerprint.unwrap_or(info.fingerprint),
+                    address: ip.to_string(),
+                    content,
+                    decision_tx,
+                };
+
+                if !self.accept.auto_accepts(&request.fingerprint) {
+                    self.add_pending(request);
                     return Ok(());
                 }
-
-                println!(
-                    "PrepareUpload from {ip} ({}): accepting {} file(s)",
-                    info.alias,
-                    files.len()
-                );
-                self.sessions.insert(session_id, info.alias);
-                let ids: HashSet<String> = files.keys().cloned().collect();
-                let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(ids));
+                if let Content::Files(ids) = &request.content {
+                    println!(
+                        "PrepareUpload from {ip} ({}): accepting {} file(s)",
+                        request.alias,
+                        ids.len()
+                    );
+                }
+                let accepted = self.pending.lock().unwrap().accept(request);
+                if let Ok(Some(text)) = accepted {
+                    run_on_text(self.on_text.clone(), text);
+                }
             }
             ServerEventV2::FileUpload {
                 file, target_tx, ..
@@ -97,11 +125,16 @@ impl Receiver {
                 });
             }
             ServerEventV2::SessionEnd { session_id, reason } => {
-                let alias = self.sessions.remove(&session_id).unwrap_or_default();
+                let alias = self
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .end_session(&session_id)
+                    .unwrap_or_default();
                 println!("SessionEnd {alias} ({session_id}): {reason:?}");
             }
             ServerEventV2::PrepareUploadAborted { session_id } => {
-                self.sessions.remove(&session_id);
+                self.pending.lock().unwrap().remove_session(&session_id);
                 println!("PrepareUploadAborted {session_id}");
             }
             ServerEventV2::CancelReceived { ip, session_id } => {
@@ -112,6 +145,29 @@ impl Receiver {
             }
         }
         Ok(())
+    }
+
+    /// Queues `request` for `lsendctl accept` or `decline`, declining it
+    /// after [`PENDING_TIMEOUT`].
+    fn add_pending(&self, request: PendingRequest) {
+        let summary = format!(
+            "{} ({}): {}",
+            request.address,
+            request.alias,
+            request.content.summary()
+        );
+        let id = self.pending.lock().unwrap().add(request);
+        println!("Pending request {id} from {summary}");
+
+        let pending = self.pending.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(PENDING_TIMEOUT).await;
+            let request = pending.lock().unwrap().take(id);
+            if let Some(request) = request {
+                let _ = request.decline();
+                println!("Pending request {id} timed out, declined");
+            }
+        });
     }
 
     /// Feeds a device confirmed outside of discovery (it registered with the

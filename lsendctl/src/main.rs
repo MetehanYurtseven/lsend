@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use ipc::{DeviceEntry, Request, Response, read_message, socket_path, write_message};
+use ipc::{DeviceEntry, PendingEntry, Request, Response, read_message, socket_path, write_message};
 use std::path::PathBuf;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
@@ -34,6 +34,19 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
+    /// List incoming requests waiting for a decision, one per line: id,
+    /// alias, address, content (tab-separated).
+    Pending,
+    /// Accept a pending request. A text message is printed to stdout.
+    Accept {
+        /// ID shown by `pending`.
+        id: u64,
+    },
+    /// Decline a pending request.
+    Decline {
+        /// ID shown by `pending`.
+        id: u64,
+    },
 }
 
 #[tokio::main]
@@ -44,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Status => (Request::Status, false),
         Command::List { fingerprint } => (Request::List, fingerprint),
         Command::Send { to, paths } => (Request::Send { target: to, paths }, false),
+        Command::Pending => (Request::Pending, false),
+        Command::Accept { id } => (Request::Accept { id }, false),
+        Command::Decline { id } => (Request::Decline { id }, false),
     };
 
     let path = socket_path()?;
@@ -68,9 +84,22 @@ async fn main() -> anyhow::Result<()> {
         }
         Response::List { devices } => print_devices(&devices, show_fingerprint),
         Response::Send { sent_files } => println!("Sent {sent_files} file(s)"),
+        Response::Pending { requests } => print_pending(&requests),
+        // Unchanged, so `accept <id> | wl-copy` copies exactly the text.
+        Response::Accept { text } => print!("{}", text.unwrap_or_default()),
+        Response::Decline => {}
     }
 
     Ok(())
+}
+
+fn print_pending(requests: &[PendingEntry]) {
+    for request in requests {
+        println!(
+            "{}\t{}\t{}\t{}",
+            request.id, request.alias, request.address, request.content
+        );
+    }
 }
 
 fn print_devices(devices: &[DeviceEntry], show_fingerprint: bool) {

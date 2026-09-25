@@ -1,6 +1,8 @@
 use crate::discovery::Discovery;
 use crate::identity::Identity;
 use crate::ipc_server::IpcServer;
+use crate::pending::SharedPending;
+use crate::policy::AcceptPolicy;
 use crate::receive::Receiver;
 use crate::server::Server;
 use localsend::discovery::DiscoveryHandle;
@@ -16,11 +18,17 @@ pub struct Daemon {
     receiver: Receiver,
     discovery: Discovery,
     ipc: IpcServer,
+    pending: SharedPending,
     sigterm: Signal,
 }
 
 impl Daemon {
-    pub async fn start(alias: String, port: u16, on_text: String) -> anyhow::Result<Self> {
+    pub async fn start(
+        alias: String,
+        port: u16,
+        on_text: String,
+        accept: AcceptPolicy,
+    ) -> anyhow::Result<Self> {
         let identity_path = Identity::path()?;
         let identity = Arc::new(Identity::load_or_generate(&identity_path, alias, port)?);
         println!(
@@ -39,10 +47,13 @@ impl Daemon {
         let ipc = IpcServer::bind().await?;
         println!("IPC socket listening at {}", ipc.path().display());
 
+        let pending = SharedPending::default();
         let receiver = Receiver::new(
             discovery.handle.clone(),
             identity.fingerprint().to_string(),
             on_text,
+            accept,
+            pending.clone(),
         );
 
         Ok(Self {
@@ -51,6 +62,7 @@ impl Daemon {
             receiver,
             discovery,
             ipc,
+            pending,
             sigterm: signal(SignalKind::terminate())?,
         })
     }
@@ -68,6 +80,7 @@ impl Daemon {
                         stream,
                         self.identity.clone(),
                         self.discovery.handle.clone(),
+                        self.pending.clone(),
                     ),
                     Err(err) => eprintln!("IPC accept failed: {err:#}"),
                 },
@@ -90,9 +103,12 @@ fn spawn_ipc_connection(
     stream: UnixStream,
     identity: Arc<Identity>,
     discovery: Arc<DiscoveryHandle>,
+    pending: SharedPending,
 ) {
     tokio::spawn(async move {
-        if let Err(err) = crate::ipc_server::handle_connection(stream, identity, discovery).await {
+        if let Err(err) =
+            crate::ipc_server::handle_connection(stream, identity, discovery, pending).await
+        {
             eprintln!("IPC connection error: {err:#}");
         }
     });

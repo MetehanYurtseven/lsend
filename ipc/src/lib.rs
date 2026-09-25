@@ -9,15 +9,32 @@ pub enum Request {
     Status,
     List,
     Send { target: String, paths: Vec<PathBuf> },
+    Pending,
+    Accept { id: u64 },
+    Decline { id: u64 },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Status(StatusResponse),
-    List { devices: Vec<DeviceEntry> },
-    Send { sent_files: usize },
-    Error { message: String },
+    List {
+        devices: Vec<DeviceEntry>,
+    },
+    Send {
+        sent_files: usize,
+    },
+    Pending {
+        requests: Vec<PendingEntry>,
+    },
+    /// `text` is set when the accepted request was a text message.
+    Accept {
+        text: Option<String>,
+    },
+    Decline,
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +50,34 @@ pub struct DeviceEntry {
     pub fingerprint: String,
     pub address: String,
     pub device_type: Option<DeviceType>,
+}
+
+/// An incoming request waiting for `accept` or `decline`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingEntry {
+    pub id: u64,
+    pub alias: String,
+    /// Verified by the TLS handshake, the value to put into the `known` file.
+    pub fingerprint: String,
+    pub address: String,
+    #[serde(flatten)]
+    pub content: PendingContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingContent {
+    Files { count: usize },
+    Text,
+}
+
+impl std::fmt::Display for PendingContent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Files { count } => write!(formatter, "{count} files"),
+            Self::Text => formatter.write_str("text"),
+        }
+    }
 }
 
 /// Mirrors `localsend::model::discovery::DeviceType` so that `lsendctl` does

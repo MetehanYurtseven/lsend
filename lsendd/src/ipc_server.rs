@@ -1,4 +1,5 @@
 use crate::identity::Identity;
+use crate::pending::SharedPending;
 use crate::send;
 use ipc::{DeviceEntry, DeviceType, Request, Response, read_message, socket_path, write_message};
 use localsend::discovery::{DiscoveryHandle, HttpChannel, StatefulDevice};
@@ -50,6 +51,7 @@ pub async fn handle_connection(
     stream: UnixStream,
     identity: Arc<Identity>,
     discovery: Arc<DiscoveryHandle>,
+    pending: SharedPending,
 ) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -64,9 +66,43 @@ pub async fn handle_connection(
                 Err(message) => Response::Error { message },
             }
         }
+        Some(Request::Pending) => Response::Pending {
+            requests: pending.lock().unwrap().entries(),
+        },
+        Some(Request::Accept { id }) => {
+            let mut pending = pending.lock().unwrap();
+            match pending.take(id).map(|request| pending.accept(request)) {
+                Some(Ok(text)) => {
+                    println!("Accepted request {id}");
+                    Response::Accept { text }
+                }
+                Some(Err(_)) => withdrawn(id),
+                None => not_pending(id),
+            }
+        }
+        Some(Request::Decline { id }) => {
+            let request = pending.lock().unwrap().take(id);
+            match request.map(|request| request.decline()) {
+                Some(Ok(())) => Response::Decline,
+                Some(Err(_)) => withdrawn(id),
+                None => not_pending(id),
+            }
+        }
         None => return Ok(()),
     };
     write_message(&mut write_half, &response).await
+}
+
+fn not_pending(id: u64) -> Response {
+    Response::Error {
+        message: format!("No pending request {id}"),
+    }
+}
+
+fn withdrawn(id: u64) -> Response {
+    Response::Error {
+        message: format!("Request {id} was withdrawn by the sender"),
+    }
 }
 
 /// Returns the known devices that are currently reachable, sorted by alias:
