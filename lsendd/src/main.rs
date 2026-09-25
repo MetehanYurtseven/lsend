@@ -33,7 +33,7 @@ fn default_alias() -> String {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut daemon = Daemon::start(default_alias(), DEFAULT_PORT, args.on_text).await?;
-    daemon.run().await;
+    let result = daemon.run().await;
     daemon.shutdown().await;
-    Ok(())
+    result
 }

@@ -2,7 +2,7 @@ use crate::identity::Identity;
 use crate::send;
 use ipc::{DeviceEntry, DeviceType, Request, Response, read_message, socket_path, write_message};
 use localsend::discovery::{DiscoveryHandle, HttpChannel, StatefulDevice};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::BufReader;
@@ -30,7 +30,7 @@ impl IpcServer {
         Ok(Self { listener, path })
     }
 
-    pub fn path(&self) -> &PathBuf {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 

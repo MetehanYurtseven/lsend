@@ -36,7 +36,9 @@ impl Receiver {
         }
     }
 
-    pub fn handle_event(&mut self, event: ServerEventV2) {
+    /// Handles one server event. Fails when the server has stopped itself
+    /// and can no longer receive anything.
+    pub fn handle_event(&mut self, event: ServerEventV2) -> anyhow::Result<()> {
         match event {
             ServerEventV2::Register { ip, info } => {
                 println!("Register from {ip}: {} ({})", info.alias, info.fingerprint);
@@ -58,7 +60,7 @@ impl Receiver {
                     // it with 204, nothing is uploaded.
                     let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(HashSet::new()));
                     run_on_text(self.on_text.clone(), message.to_string());
-                    return;
+                    return Ok(());
                 }
 
                 println!(
@@ -106,9 +108,10 @@ impl Receiver {
                 println!("CancelReceived from {ip}: {session_id}");
             }
             ServerEventV2::ListenerFailed { error } => {
-                eprintln!("Server listener failed: {error}");
+                anyhow::bail!("Server listener failed: {error}");
             }
         }
+        Ok(())
     }
 
     /// Feeds a device confirmed outside of discovery (it registered with the

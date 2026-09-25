@@ -16,7 +16,7 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    pub async fn start(identity: &Identity) -> anyhow::Result<Self> {
+    pub async fn start(identity: &Identity) -> Self {
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let handle = localsend::discovery::start(
             DiscoveryConfig {
@@ -40,10 +40,10 @@ impl Discovery {
             eprintln!("Multicast unavailable: {err:#}");
         }
 
-        Ok(Self {
+        Self {
             handle: Arc::new(handle),
             stop_tx,
-        })
+        }
     }
 
     pub async fn announce(&self) {

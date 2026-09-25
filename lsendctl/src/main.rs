@@ -40,11 +40,10 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let json = cli.json;
-    let show_fingerprint = matches!(cli.command, Command::List { fingerprint: true });
-    let request = match cli.command {
-        Command::Status => Request::Status,
-        Command::List { .. } => Request::List,
-        Command::Send { to, paths } => Request::Send { target: to, paths },
+    let (request, show_fingerprint) = match cli.command {
+        Command::Status => (Request::Status, false),
+        Command::List { fingerprint } => (Request::List, fingerprint),
+        Command::Send { to, paths } => (Request::Send { target: to, paths }, false),
     };
 
     let path = socket_path()?;

@@ -32,7 +32,7 @@ impl Daemon {
         let server = Server::start(&identity).await?;
         println!("HTTP server listening on port {port}");
 
-        let discovery = Discovery::start(&identity).await?;
+        let discovery = Discovery::start(&identity).await;
         println!("Announcing on the network...");
         discovery.announce().await;
 
@@ -56,12 +56,13 @@ impl Daemon {
     }
 
     /// Runs the event loop until SIGINT (Ctrl+C) or SIGTERM (e.g. systemd
-    /// stopping the service) arrives.
-    pub async fn run(&mut self) {
+    /// stopping the service) arrives. Fails when the HTTP server has stopped
+    /// itself, leaving a restart to the service manager.
+    pub async fn run(&mut self) -> anyhow::Result<()> {
         println!("Running. Press Ctrl+C to stop.");
         loop {
             tokio::select! {
-                Some(event) = self.server.events.recv() => self.receiver.handle_event(event),
+                Some(event) = self.server.events.recv() => self.receiver.handle_event(event)?,
                 accept_result = self.ipc.accept() => match accept_result {
                     Ok(stream) => spawn_ipc_connection(
                         stream,
@@ -74,6 +75,7 @@ impl Daemon {
                 _ = self.sigterm.recv() => break,
             }
         }
+        Ok(())
     }
 
     pub async fn shutdown(self) {
