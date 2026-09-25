@@ -1,5 +1,5 @@
 use localsend::crypto::cert::SelfSignedCert;
-use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
+use localsend::http::server::v2::ServerEventV2;
 use localsend::http::server::web::WebConfig;
 use localsend::http::server::{ServerConfigV2, ServerHandle, TlsConfig, start_with_port};
 use localsend::http::state::ClientInfo;
@@ -54,41 +54,5 @@ impl Server {
     pub async fn shutdown(self) {
         let _ = self.stop_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(1), self.handle.wait_stopped()).await;
-    }
-}
-
-/// Handles an incoming server event. No auto-accept exists in the core
-/// crate, so prepare-upload requests are declined until `lsendd` grows a
-/// real accept policy.
-pub fn handle_event(event: ServerEventV2) {
-    match event {
-        ServerEventV2::Register { ip, info } => {
-            println!("Register from {ip}: {} ({})", info.alias, info.fingerprint);
-        }
-        ServerEventV2::PrepareUpload {
-            ip,
-            info,
-            decision_tx,
-            ..
-        } => {
-            println!("PrepareUpload from {ip} ({}): declining", info.alias);
-            let _ = decision_tx.send(PrepareUploadDecisionV2::Decline);
-        }
-        ServerEventV2::FileUpload { target_tx, .. } => {
-            // Never reached: no PrepareUpload is ever accepted above.
-            drop(target_tx);
-        }
-        ServerEventV2::SessionEnd { session_id, reason } => {
-            println!("SessionEnd {session_id}: {reason:?}");
-        }
-        ServerEventV2::PrepareUploadAborted { session_id } => {
-            println!("PrepareUploadAborted {session_id}");
-        }
-        ServerEventV2::CancelReceived { ip, session_id } => {
-            println!("CancelReceived from {ip}: {session_id}");
-        }
-        ServerEventV2::ListenerFailed { error } => {
-            eprintln!("Server listener failed: {error}");
-        }
     }
 }

@@ -1,7 +1,8 @@
 use crate::discovery::Discovery;
 use crate::identity::{self, Identity};
 use crate::ipc_server::IpcServer;
-use crate::server::{self, Server};
+use crate::receive::Receiver;
+use crate::server::Server;
 use ipc::StatusResponse;
 use localsend::discovery::DiscoveryHandle;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ pub struct Daemon {
     status: StatusResponse,
     identity: Arc<Identity>,
     server: Server,
+    receiver: Receiver,
     discovery: Discovery,
     ipc: IpcServer,
 }
@@ -41,6 +43,7 @@ impl Daemon {
             },
             identity,
             server,
+            receiver: Receiver::new(),
             discovery,
             ipc,
         })
@@ -51,7 +54,7 @@ impl Daemon {
         println!("Running. Press Ctrl+C to stop.");
         loop {
             tokio::select! {
-                Some(event) = self.server.events.recv() => server::handle_event(event),
+                Some(event) = self.server.events.recv() => self.receiver.handle_event(event),
                 accept_result = self.ipc.accept() => match accept_result {
                     Ok(stream) => spawn_ipc_connection(
                         stream,
