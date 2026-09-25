@@ -3,29 +3,36 @@ use localsend::http::dto_v2::RegisterDtoV2;
 use localsend::http::server::PeerIp;
 use localsend::http::server::common::save::FileUploadTarget;
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
+use localsend::model::transfer::FileDto;
 use localsend::util::filename::{self, Rules};
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use tokio::sync::oneshot;
 
 /// Handles incoming server events: accepts every upload request and writes
-/// files into the XDG download directory, resolving name collisions.
+/// files into the XDG download directory, resolving name collisions. Text
+/// messages are handed to the `on_text` command instead.
 pub struct Receiver {
     /// Alias of the sender for each active session, for logging.
     sessions: HashMap<String, String>,
     discovery: Arc<DiscoveryHandle>,
     own_fingerprint: String,
+    on_text: String,
 }
 
 impl Receiver {
-    pub fn new(discovery: Arc<DiscoveryHandle>, own_fingerprint: String) -> Self {
+    pub fn new(discovery: Arc<DiscoveryHandle>, own_fingerprint: String, on_text: String) -> Self {
         Self {
             sessions: HashMap::new(),
             discovery,
             own_fingerprint,
+            on_text,
         }
     }
 
@@ -43,13 +50,22 @@ impl Receiver {
                 decision_tx,
                 ..
             } => {
+                // The sender is clearly reachable.
+                self.device_confirmed(ip, info.clone());
+
+                if let Some(message) = message_of(&files) {
+                    // The text is the request itself: accepting no file ends
+                    // it with 204, nothing is uploaded.
+                    let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(HashSet::new()));
+                    run_on_text(self.on_text.clone(), message.to_string());
+                    return;
+                }
+
                 println!(
                     "PrepareUpload from {ip} ({}): accepting {} file(s)",
                     info.alias,
                     files.len()
                 );
-                // The sender is clearly reachable.
-                self.device_confirmed(ip, info.clone());
                 self.sessions.insert(session_id, info.alias);
                 let ids: HashSet<String> = files.keys().cloned().collect();
                 let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(ids));
@@ -120,6 +136,46 @@ impl Receiver {
             discovery.add_device(device).await;
         });
     }
+}
+
+/// The text of a message request: a single text file whose content is
+/// embedded in `preview`, as the official app sends it.
+fn message_of(files: &HashMap<String, FileDto>) -> Option<&str> {
+    let [file] = files.values().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    if file.file_type != "text" && !file.file_type.starts_with("text/") {
+        return None;
+    }
+    file.preview.as_deref()
+}
+
+/// Runs `command` through `sh -c` with `message` on its stdin, without
+/// blocking the caller.
+fn run_on_text(command: String, message: String) {
+    tokio::spawn(async move {
+        let mut child = match Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(err) => {
+                eprintln!("Failed to run on-text command: {err}");
+                return;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            // A command that does not read its input closes the pipe early.
+            let _ = stdin.write_all(message.as_bytes()).await;
+        }
+        match child.wait().await {
+            Ok(status) if !status.success() => eprintln!("on-text command exited with {status}"),
+            Ok(_) => {}
+            Err(err) => eprintln!("Failed to wait for on-text command: {err}"),
+        }
+    });
 }
 
 /// The XDG download directory, falling back to the current directory when it

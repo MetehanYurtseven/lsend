@@ -20,7 +20,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub async fn start(alias: String, port: u16) -> anyhow::Result<Self> {
+    pub async fn start(alias: String, port: u16, on_text: String) -> anyhow::Result<Self> {
         let identity_path = Identity::path()?;
         let identity = Arc::new(Identity::load_or_generate(&identity_path, alias, port)?);
         println!(
@@ -39,7 +39,11 @@ impl Daemon {
         let ipc = IpcServer::bind().await?;
         println!("IPC socket listening at {}", ipc.path().display());
 
-        let receiver = Receiver::new(discovery.handle.clone(), identity.fingerprint().to_string());
+        let receiver = Receiver::new(
+            discovery.handle.clone(),
+            identity.fingerprint().to_string(),
+            on_text,
+        );
 
         Ok(Self {
             identity,

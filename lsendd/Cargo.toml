@@ -7,7 +7,8 @@ edition.workspace = true
 localsend = { git = "https://github.com/localsend/localsend", package = "localsend", rev = "e768240d1ad95f0f162b852b5ff37bec71cde1ef", features = ["discovery", "http"] }
 ipc = { path = "../ipc" }
 anyhow = "1.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "fs"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2.0"
