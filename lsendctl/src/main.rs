@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use ipc::{Request, Response, read_message, socket_path, write_message};
+use ipc::{DeviceEntry, Request, Response, read_message, socket_path, write_message};
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
 
@@ -14,6 +14,8 @@ struct Cli {
 enum Command {
     /// Show the daemon's identity and status.
     Status,
+    /// List devices discovered so far.
+    List,
 }
 
 #[tokio::main]
@@ -21,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let request = match cli.command {
         Command::Status => Request::Status,
+        Command::List => Request::List,
     };
 
     let path = socket_path()?;
@@ -41,8 +44,27 @@ async fn main() -> anyhow::Result<()> {
             println!("fingerprint: {}", status.fingerprint);
             println!("port: {}", status.port);
         }
+        Response::List { devices } => print_devices(&devices),
         Response::Error { message } => anyhow::bail!("lsendd error: {message}"),
     }
 
     Ok(())
+}
+
+fn print_devices(devices: &[DeviceEntry]) {
+    if devices.is_empty() {
+        println!("No devices discovered yet.");
+        return;
+    }
+    for device in devices {
+        let device_type = device
+            .device_type
+            .as_ref()
+            .map(|t| format!("{t:?}"))
+            .unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "{}\t{}\t{}\t{}",
+            device.alias, device.fingerprint, device.address, device_type
+        );
+    }
 }

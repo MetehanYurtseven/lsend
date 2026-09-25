@@ -7,12 +7,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Request {
     Status,
+    List,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Status(StatusResponse),
+    List { devices: Vec<DeviceEntry> },
     Error { message: String },
 }
 
@@ -21,6 +23,26 @@ pub struct StatusResponse {
     pub alias: String,
     pub fingerprint: String,
     pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceEntry {
+    pub alias: String,
+    pub fingerprint: String,
+    pub address: String,
+    pub device_type: Option<DeviceType>,
+}
+
+/// Mirrors `localsend::model::discovery::DeviceType` so that `lsendctl` does
+/// not need to depend on the `localsend` core crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceType {
+    Mobile,
+    Desktop,
+    Web,
+    Headless,
+    Server,
 }
 
 /// The Unix domain socket lsendd listens on and lsendctl connects to.

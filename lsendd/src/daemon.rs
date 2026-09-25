@@ -3,6 +3,8 @@ use crate::identity;
 use crate::ipc_server::IpcServer;
 use crate::server::{self, Server};
 use ipc::StatusResponse;
+use localsend::discovery::DiscoveryHandle;
+use std::sync::Arc;
 use tokio::net::UnixStream;
 
 /// The daemon's lifecycle: identity, server, discovery and IPC, from start
@@ -48,7 +50,11 @@ impl Daemon {
             tokio::select! {
                 Some(event) = self.server.events.recv() => server::handle_event(event),
                 accept_result = self.ipc.accept() => match accept_result {
-                    Ok(stream) => spawn_ipc_connection(stream, self.status.clone()),
+                    Ok(stream) => spawn_ipc_connection(
+                        stream,
+                        self.status.clone(),
+                        self.discovery.handle.clone(),
+                    ),
                     Err(err) => eprintln!("IPC accept failed: {err:#}"),
                 },
                 _ = tokio::signal::ctrl_c() => break,
@@ -64,9 +70,13 @@ impl Daemon {
     }
 }
 
-fn spawn_ipc_connection(stream: UnixStream, status: StatusResponse) {
+fn spawn_ipc_connection(
+    stream: UnixStream,
+    status: StatusResponse,
+    discovery: Arc<DiscoveryHandle>,
+) {
     tokio::spawn(async move {
-        if let Err(err) = crate::ipc_server::handle_connection(stream, status).await {
+        if let Err(err) = crate::ipc_server::handle_connection(stream, status, discovery).await {
             eprintln!("IPC connection error: {err:#}");
         }
     });
