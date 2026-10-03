@@ -79,7 +79,14 @@ async fn main() -> anyhow::Result<()> {
                 Some(text) => SendPayload::Text {
                     text: resolve_text(text)?,
                 },
-                None => SendPayload::Files { paths },
+                // The daemon has its own working directory, so resolve
+                // relative paths against ours.
+                None => SendPayload::Files {
+                    paths: paths
+                        .into_iter()
+                        .map(std::path::absolute)
+                        .collect::<Result<_, _>>()?,
+                },
             };
             (
                 Request::Send {
@@ -103,6 +110,16 @@ async fn main() -> anyhow::Result<()> {
     let mut reader = BufReader::new(read_half);
 
     write_message(&mut write_half, &request).await?;
+    // The daemon only answers once the receiver decided and the upload is
+    // done. stderr keeps stdout clean for scripts.
+    if let Request::Send {
+        target,
+        payload: SendPayload::Files { .. },
+    } = &request
+        && !json
+    {
+        eprintln!("Waiting for {target} to accept...");
+    }
     let response = read_message::<_, Response>(&mut reader)
         .await?
         .ok_or_else(|| anyhow::anyhow!("lsendd closed the connection without responding"))?;
